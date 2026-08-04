@@ -230,7 +230,10 @@ def train_dlp(config_path='./configs/shapes.json'):
     if load_model and pretrained_path is not None:
         try:
             unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.load_state_dict(torch.load(pretrained_path, map_location=accelerator.device))
+            state = torch.load(pretrained_path, map_location=accelerator.device)
+            if isinstance(state, dict) and 'model_state_dict' in state:
+                state = state['model_state_dict']
+            unwrapped_model.load_state_dict(state)
             print("loaded model from checkpoint")
         except:
             print("model checkpoint not found")

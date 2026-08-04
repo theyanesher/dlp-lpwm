@@ -400,7 +400,10 @@ def load_dlp_from_config(conf_path, ckpt_path=None, model_type='gddlp'):
                 )
     if ckpt_path is not None:
         try:
-            model.load_state_dict(torch.load(ckpt_path, map_location=torch.device('cpu'), weights_only=False))
+            state = torch.load(ckpt_path, map_location=torch.device('cpu'), weights_only=False)
+            if isinstance(state, dict) and 'model_state_dict' in state:
+                state = state['model_state_dict']
+            model.load_state_dict(state)
             print("loaded dlp model from checkpoint")
         except:
             print("dlp model checkpoint not found")

@@ -214,8 +214,20 @@ def train_dlp(config_path='./configs/shapes.json'):
 
     if load_model and pretrained_path is not None:
         try:
-            model.load_state_dict(torch.load(pretrained_path, map_location=device, weights_only=False))
-            print("loaded model from checkpoint")
+            checkpoint = torch.load(pretrained_path, map_location=device, weights_only=False)
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                if 'optimizer_state_dict' in checkpoint:
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                if use_scheduler and checkpoint.get('scheduler_state_dict') is not None:
+                    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                if config.get('resume_epoch', False) and 'epoch' in checkpoint:
+                    start_epoch = checkpoint['epoch'] + 1
+                print(f"loaded model + optimizer state from checkpoint (epoch {checkpoint.get('epoch')})")
+            else:
+                # backward-compatibility with checkpoints that only stored the model's state_dict
+                model.load_state_dict(checkpoint)
+                print("loaded model from checkpoint (no optimizer state found)")
         except:
             print("model checkpoint not found")
 
@@ -245,6 +257,14 @@ def train_dlp(config_path='./configs/shapes.json'):
     else:
         best_val_lpips_epoch = None
         val_lpips = best_val_lpips = None
+
+    def make_checkpoint(epoch):
+        return {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict() if use_scheduler else None,
+            'epoch': epoch,
+        }
 
     # iteration counter
     iteration = 0
@@ -471,7 +491,7 @@ def train_dlp(config_path='./configs/shapes.json'):
             #               dim=0).data.cpu(), '{}/image_obj_{}.jpg'.format(fig_dir, epoch),
             #     nrow=8, pad_value=1)
 
-            torch.save(model.state_dict(), os.path.join(save_dir, f'{ds}_gdlp{run_prefix}.pth'))
+            torch.save(make_checkpoint(epoch), os.path.join(save_dir, f'{ds}_gdlp{run_prefix}.pth'))
             print("validation step...")
             valid_loss = evaluate_validation_elbo(model, config, epoch, batch_size=batch_size,
                                                   recon_loss_type=recon_loss_type, device=device,
@@ -488,7 +508,7 @@ def train_dlp(config_path='./configs/shapes.json'):
                 log_line(log_dir, log_str)
                 best_valid_loss = valid_loss
                 best_valid_epoch = epoch
-                torch.save(model.state_dict(),
+                torch.save(make_checkpoint(epoch),
                            os.path.join(save_dir,
                                         f'{ds}_gdlp{run_prefix}_best.pth'))
             torch.cuda.empty_cache()
@@ -508,7 +528,7 @@ def train_dlp(config_path='./configs/shapes.json'):
                     log_line(log_dir, log_str)
                     best_val_lpips = val_lpips
                     best_val_lpips_epoch = epoch
-                    torch.save(model.state_dict(),
+                    torch.save(make_checkpoint(epoch),
                                os.path.join(save_dir, f'{ds}_gdlp{run_prefix}_best_lpips.pth'))
                 torch.cuda.empty_cache()
         valid_losses.append(valid_loss)

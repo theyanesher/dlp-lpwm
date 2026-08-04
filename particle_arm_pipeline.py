@@ -72,7 +72,9 @@ def load_lpwm(model_dir: Path, checkpoint: Path | None, device: torch.device,
         if checkpoint is None:
             raise FileNotFoundError("No default checkpoint found; pass --checkpoint explicitly")
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    if isinstance(state, dict) and "state_dict" in state:
+    if isinstance(state, dict) and "model_state_dict" in state:
+        state = state["model_state_dict"]
+    elif isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
     if state and all(key.startswith("module.") for key in state):
         state = {key.removeprefix("module."): value for key, value in state.items()}
