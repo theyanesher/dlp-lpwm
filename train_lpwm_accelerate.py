@@ -47,9 +47,13 @@ def train_ddlp(config_path='./configs/balls.json'):
         config = get_config(config_path)
     except FileNotFoundError:
         raise SystemExit("config file not found")
+    gradient_accumulation_steps = config.get('gradient_accumulation_steps', 1)
+    if gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
     find_unused_parameters = False
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=find_unused_parameters)
-    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+    accelerator = Accelerator(gradient_accumulation_steps=gradient_accumulation_steps,
+                              kwargs_handlers=[ddp_kwargs])
     # in conf: "num_processes": num_visible_gpus
     hparams = config  # to save a copy of the hyper-parameters
 
@@ -93,6 +97,7 @@ def train_ddlp(config_path='./configs/balls.json'):
 
     # optimization
     batch_size = config['batch_size']
+    num_workers = config.get('num_workers', 4)
     lr = config['lr']
     num_epochs = config['num_epochs']
     start_epoch = config.get('start_epoch', 0)
@@ -173,7 +178,7 @@ def train_ddlp(config_path='./configs/balls.json'):
 
     # load data
     dataset = get_video_dataset(ds, root, seq_len=timestep_horizon + 1, mode='train', image_size=image_size)
-    dataloader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=4, pin_memory=True,
+    dataloader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
                             drop_last=True)
     # model
     model = DLP(cdim=ch,  # Number of input image channels
@@ -268,6 +273,8 @@ def train_ddlp(config_path='./configs/balls.json'):
     log_dir = prepare_logdir(runname=run_name, src_dir='./', accelerator=accelerator)
     fig_dir = os.path.join(log_dir, 'figures')
     save_dir = os.path.join(log_dir, 'saves')
+    wandb_run = None
+    wandb_module = None
     if accelerator.is_main_process:
         save_config(log_dir, hparams)
         log_line(log_dir, model_info)
@@ -275,6 +282,23 @@ def train_ddlp(config_path='./configs/balls.json'):
         backup_info = save_code_backup('.', backup_dir=os.path.join(log_dir, 'saves', 'code_backup'))
         log_line(log_dir, backup_info)
         print(backup_info)
+        if config.get('wandb_enabled', False):
+            try:
+                import wandb as wandb_module
+            except ImportError as error:
+                raise RuntimeError(
+                    "W&B logging is enabled but wandb is not installed; run `pip install -r requirements.txt` "
+                    "or set wandb_enabled=false"
+                ) from error
+            wandb_run = wandb_module.init(
+                project=config.get('wandb_project', 'lpwm'),
+                entity=config.get('wandb_entity'),
+                name=config.get('wandb_run_name') or os.path.basename(log_dir),
+                config=hparams,
+                dir=log_dir,
+            )
+            wandb_run.define_metric('optimizer_step')
+            wandb_run.define_metric('train/*', step_metric='optimizer_step')
 
     # get the range of the keypoints, it is [-1, 1] by default
     kp_range = model.kp_range
@@ -333,6 +357,8 @@ def train_ddlp(config_path='./configs/balls.json'):
     # iteration counter for discounting, optional
     iter_per_epoch = 1 * len(dataloader)
     iteration = 0  # initialize iterations counter
+    optimizer_step = 0
+    wandb_log_interval = max(1, config.get('wandb_log_interval', 10))
     warmup_iteration = 0
     max_warmup_iterations = int(0.8 * iter_per_epoch)
 
@@ -372,20 +398,21 @@ def train_ddlp(config_path='./configs/balls.json'):
                 if ep_done_mask is not None:
                     ep_done_mask = ep_done_mask.permute(0, 2, 1)
                     ep_done_mask - ep_done_mask.reshape(-1, *ep_done_mask.shape[2:])
-            model_output = model(x, actions=actions, lang_embed=lang_embed, warmup=warmup, with_loss=True,
-                                 beta_kl=beta_kl,
-                                 beta_dyn=beta_dyn, beta_rec=beta_rec, kl_balance=kl_balance,
-                                 dynamic_discount=discount, recon_loss_type=recon_loss_type,
-                                 recon_loss_func=recon_loss_func, beta_dyn_rec=beta_dyn_rec, beta_obj=beta_obj,
-                                 done_mask=ep_done_mask, x_goal=x_goal)
-            # calculate loss
-            all_losses = model_output['loss_dict']
+            with accelerator.accumulate(model):
+                model_output = model(x, actions=actions, lang_embed=lang_embed, warmup=warmup, with_loss=True,
+                                     beta_kl=beta_kl,
+                                     beta_dyn=beta_dyn, beta_rec=beta_rec, kl_balance=kl_balance,
+                                     dynamic_discount=discount, recon_loss_type=recon_loss_type,
+                                     recon_loss_func=recon_loss_func, beta_dyn_rec=beta_dyn_rec, beta_obj=beta_obj,
+                                     done_mask=ep_done_mask, x_goal=x_goal)
+                # Accelerate scales the loss, delays DDP synchronization, and
+                # makes step/zero_grad no-ops until an accumulation boundary.
+                all_losses = model_output['loss_dict']
+                loss = all_losses['loss']
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
             iteration += 1
-
-            loss = all_losses['loss']
-            optimizer.zero_grad()
-            accelerator.backward(loss)
-            optimizer.step()
 
             # output for logging and plotting
             mu_p = model_output['kp_p']
@@ -438,6 +465,26 @@ def train_ddlp(config_path='./configs/balls.json'):
             batch_losses_kl_obj_on.append(loss_kl_obj_on.data.cpu().item())
             batch_losses_kl_context.append(loss_kl_context.data.cpu().item())
 
+            if accelerator.sync_gradients:
+                optimizer_step += 1
+                if wandb_run is not None and optimizer_step % wandb_log_interval == 0:
+                    wandb_run.log({
+                        'optimizer_step': optimizer_step,
+                        'epoch': epoch,
+                        'train/loss': loss.detach().item(),
+                        'train/reconstruction_loss': loss_rec.detach().item(),
+                        'train/kl_loss': loss_kl.detach().item(),
+                        'train/dynamics_kl': loss_kl_dyn.detach().item(),
+                        'train/context_kl': loss_kl_context.detach().item(),
+                        'train/keypoint_kl': loss_kl_kp.detach().item(),
+                        'train/feature_kl': loss_kl_feat.detach().item(),
+                        'train/object_on_kl': loss_kl_obj_on.detach().item(),
+                        'train/psnr': psnr.detach().item(),
+                        'train/object_on_mean': obj_on.detach().mean().item(),
+                        'train/particle_scale_mean': mu_scale_mean.detach().item(),
+                        'train/learning_rate': optimizer.param_groups[0]['lr'],
+                    })
+
             # progress bar
             if epoch < warmup_epoch:
                 pbar.set_description_str(f'epoch #{epoch} (warmup)')
@@ -451,7 +498,7 @@ def train_ddlp(config_path='./configs/balls.json'):
                              smu=mu_scale_mean.data.cpu().item())
             if warmup:
                 warmup_iteration += 1
-                if warmup_iteration > max_warmup_iterations:
+                if warmup_iteration > max_warmup_iterations and accelerator.sync_gradients:
                     warmup_iteration = 0
                     break
 
@@ -563,6 +610,7 @@ def train_ddlp(config_path='./configs/balls.json'):
 
                 dec_objects = model_output['dec_objects']
                 bg = model_output['bg_rgb']
+                reconstruction_grid_path = os.path.join(fig_dir, f'image_{epoch}.jpg')
                 vutils.save_image(torch.cat([x[:max_imgs, -3:], img_with_kp[:max_imgs, -3:].to(accelerator.device),
                                              rec_x[:max_imgs, -3:],
                                              img_with_kp_p[:max_imgs, -3:].to(accelerator.device),
@@ -572,8 +620,14 @@ def train_ddlp(config_path='./configs/balls.json'):
                                              img_with_masks_alpha_nms[:max_imgs, -3:].to(accelerator.device),
                                              img_with_seg_maps[:max_imgs, -3:],
                                              bg[:max_imgs, -3:]],
-                                            dim=0).data.cpu(), '{}/image_{}.jpg'.format(fig_dir, epoch),
+                                            dim=0).data.cpu(), reconstruction_grid_path,
                                   nrow=8, pad_value=1)
+                if wandb_run is not None:
+                    wandb_run.log({
+                        'optimizer_step': optimizer_step,
+                        'epoch': epoch,
+                        'media/reconstruction_particle_grid': wandb_module.Image(reconstruction_grid_path),
+                    })
 
                 accelerator.save(unwrapped_model.state_dict(), os.path.join(save_dir, f'{ds}_gddlp{run_prefix}.pth'))
             animate_trajectory_lpwm(model.module, config, epoch, device=accelerator.device, fig_dir=fig_dir,
@@ -640,9 +694,31 @@ def train_ddlp(config_path='./configs/balls.json'):
             ]
             save_metrics_data(metrics_data, run_name, save_dir=os.path.join(save_dir, 'metrics'))
             plot_training_metrics(metrics_data, run_name, fig_dir, max_plots_per_figure=4)
+        if wandb_run is not None:
+            epoch_metrics = {
+                'optimizer_step': optimizer_step,
+                'epoch': epoch,
+                'epoch/train_loss': float(losses[-1]),
+                'epoch/reconstruction_loss': float(losses_rec[-1]),
+                'epoch/kl_loss': float(losses_kl[-1]),
+                'epoch/dynamics_kl': float(losses_kl_dyn[-1]),
+                'epoch/context_kl': float(losses_kl_context[-1]),
+                'epoch/psnr': float(psnrs[-1]) if psnrs else 0.0,
+                'validation/loss': float(valid_loss),
+                'validation/best_loss': float(best_valid_loss),
+            }
+            if eval_im_metrics and epoch > 0 and (epoch % eval_epoch_freq == 0 or epoch == num_epochs - 1):
+                epoch_metrics.update({
+                    'validation/lpips': float(val_lpips),
+                    'validation/psnr': float(valid_imm_results['psnr']),
+                    'validation/ssim': float(valid_imm_results['ssim']),
+                })
+            wandb_run.log(epoch_metrics)
 
     accelerator.wait_for_everyone()
     unwrapped_model = accelerator.unwrap_model(model)
+    if wandb_run is not None:
+        wandb_run.finish()
     return unwrapped_model
 
 

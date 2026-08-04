@@ -1,0 +1,41 @@
+{
+  "video": "/home/theyanesh/LIBERO/demo_videos/16_put_the_white_mug_on_the_left_plate_and_put_the_yellow_and_white_mug_on__agentview.mp4",
+  "model_checkpoint": "030826_125917_libero_gdlp/saves/libero_gddlp_best_lpips.pth",
+  "frame_selections": {
+    "0": [
+      0,
+      5,
+      6,
+      10,
+      14,
+      16,
+      18,
+      23,
+      24,
+      25,
+      29,
+      30,
+      32,
+      36,
+      42,
+      43,
+      49,
+      51,
+      52,
+      54,
+      55,
+      61,
+      62,
+      63,
+      64,
+      70,
+      73,
+      74,
+      75,
+      76,
+      78,
+      84,
+      85
+    ]
+  }
+}

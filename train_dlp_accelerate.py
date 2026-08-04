@@ -471,7 +471,7 @@ def train_dlp(config_path='./configs/shapes.json'):
                                             dim=0).data.cpu(), '{}/image_{}.jpg'.format(fig_dir, epoch),
                                   nrow=8, pad_value=1)
 
-            accelerator.save(unwrapped_model.state_dict(), os.path.join(save_dir, f'{ds}_gddlp{run_prefix}.pth'))
+            accelerator.save(unwrapped_model.state_dict(), os.path.join(save_dir, f'{ds}_gdlp{run_prefix}.pth'))
             print("validation step...")
             eval_model = unwrapped_model
             valid_loss = evaluate_validation_elbo(eval_model, config, epoch, batch_size=batch_size,
@@ -492,7 +492,7 @@ def train_dlp(config_path='./configs/shapes.json'):
                 best_valid_loss = valid_loss
                 best_valid_epoch = epoch
                 accelerator.save(unwrapped_model.state_dict(),
-                                 os.path.join(save_dir, f'{ds}_gddlp{run_prefix}_best.pth'))
+                                 os.path.join(save_dir, f'{ds}_gdlp{run_prefix}_best.pth'))
             accelerator.wait_for_everyone()
             torch.cuda.empty_cache()
             if eval_im_metrics and epoch > 0:
@@ -515,7 +515,7 @@ def train_dlp(config_path='./configs/shapes.json'):
                     best_val_lpips = val_lpips
                     best_val_lpips_epoch = epoch
                     accelerator.save(unwrapped_model.state_dict(),
-                                     os.path.join(save_dir, f'{ds}_gddlp{run_prefix}_best_lpips.pth'))
+                                     os.path.join(save_dir, f'{ds}_gdlp{run_prefix}_best_lpips.pth'))
                 accelerator.wait_for_everyone()
                 torch.cuda.empty_cache()
         valid_losses.append(valid_loss)

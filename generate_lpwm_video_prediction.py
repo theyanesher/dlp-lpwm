@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-def load_dlp_from_config(conf_path, ckpt_path=None):
+def load_dlp_from_config(conf_path, ckpt_path=None, model_type='gddlp'):
     # load config
     try:
         config = get_config(conf_path)
@@ -27,7 +27,9 @@ def load_dlp_from_config(conf_path, ckpt_path=None):
     image_size = config['image_size']
     n_views = config.get('n_views', 1)
     # model
-    timestep_horizon = config['timestep_horizon']
+    # a plain DLP (model_type='gdlp') has no dynamics/context modules, since those are
+    # only built when timestep_horizon > 1 - see models.DLP.is_dynamics_model
+    timestep_horizon = config['timestep_horizon'] if model_type == 'gddlp' else 1
     num_static_frames = config['num_static_frames']
     pad_mode = config['pad_mode']
     n_kp_per_patch = config['n_kp_per_patch']  # kp per patch in prior, best to leave at 1

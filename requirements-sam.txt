@@ -1,0 +1,3 @@
+# Optional dependency for particle_arm_pipeline.py sam-test.
+# Pinned to the Meta SAM 2 revision validated with this repository.
+sam-2 @ git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4

@@ -82,6 +82,7 @@ def train_ddlp(config_path='./configs/balls.json'):
 
     # optimization
     batch_size = config['batch_size']
+    num_workers = config.get('num_workers', 4)
     lr = config['lr']
     num_epochs = config['num_epochs']
     start_epoch = config.get('start_epoch', 0)
@@ -162,7 +163,7 @@ def train_ddlp(config_path='./configs/balls.json'):
 
     # load data
     dataset = get_video_dataset(ds, root, seq_len=timestep_horizon + 1, mode='train', image_size=image_size)
-    dataloader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=4, pin_memory=True,
+    dataloader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
                             drop_last=True)
     # model
     model = DLP(cdim=ch,  # Number of input image channels

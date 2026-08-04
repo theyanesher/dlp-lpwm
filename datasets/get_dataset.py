@@ -12,6 +12,7 @@ from datasets.bair_ds import BAIRVideo, BAIRImage
 from datasets.bair64_ds import BAIR64Video, BAIR64Image
 from datasets.sketchy_ds import SketchyVideoDataset, SketchyImageDataset
 from datasets.ogbench_ds import OGBenchDataset, OGBenchDatasetImage
+from datasets.libero_ds import LiberoVideoDataset, LiberoImageDataset
 from torchvision.datasets import CIFAR10
 from torchvision.transforms import ToTensor
 
@@ -45,6 +46,8 @@ def get_video_dataset(ds, root, seq_len=1, mode='train', image_size=128):
         dataset = SketchyVideoDataset(root=root, mode=mode, sample_length=seq_len, image_size=image_size)
     elif ds == "ogbench":
         dataset = OGBenchDataset(root=root, mode=mode, sample_length=seq_len, image_size=image_size)
+    elif ds == "libero":
+        dataset = LiberoVideoDataset(root=root, mode=mode, sample_length=seq_len, image_size=image_size)
     else:
         raise NotImplementedError
     return dataset
@@ -87,6 +90,8 @@ def get_image_dataset(ds, root, mode='train', image_size=128, seq_len=1):
         dataset = MarioImage(root=root, image_size=image_size, mode=mode, sample_length=seq_len)
     elif ds == "ogbench":
         dataset = OGBenchDatasetImage(root=root, mode=mode, sample_length=seq_len, image_size=image_size)
+    elif ds == "libero":
+        dataset = LiberoImageDataset(root=root, mode=mode, sample_length=seq_len, image_size=image_size)
     else:
         raise NotImplementedError
     return dataset

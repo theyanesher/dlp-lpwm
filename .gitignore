@@ -1,0 +1,6 @@
+data/
+.venv/
+.claude/
+__pycache__/
+checkpoints/
+*_libero_gd*/
